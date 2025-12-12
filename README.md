@@ -1,146 +1,273 @@
 # Footprint Representation Learning with Contrastive CNNs
 
 Final project for **CSE 5526**  
-Authors: Kyle Dietrich
-         Wonyoung Kim 
+Authors: **Kyle Dietrich**, **Wonyoung Kim**
 
 ---
 
 ## 1. Project Overview
 
-This project explores **representation learning for animal footprints** using the **AnimalClue** dataset.  
-The main goals are:
+This project explores **representation learning for animal footprints** using the **AnimalClue** footprint dataset.
+
+Our main goals are:
 
 - Learn **footprint image embeddings** with **contrastive learning** (SimCLR-style, NT-Xent loss).
 - Evaluate those embeddings via a **linear probe** for species classification.
-- Compare contrastive pretraining to a **fully supervised CNN baseline** (planned).
+- Compare contrastive pretraining to a **fully supervised CNN** trained end-to-end.
+- Explore similarity-based species identification using **k-NN retrieval** in the learned embedding space.
 
-Rather than training a standard softmax classifier end-to-end, the project focuses on learning a **general-purpose footprint representation** that can be reused for downstream tasks.
+Rather than just training a standard classifier, we focus on learning a **general-purpose footprint representation** that can support multiple downstream tasks.
 
 ---
 
-## 2. Data: AnimalClue Footprint Subset
+## 2. Data: AnimalClue Footprint Dataset
 
-The project uses the **footprint subset** of the AnimalClue dataset in **YOLO format** (`footprint_yolo` on Hugging Face).
+We use the **`footprint_yolo`** dataset from AnimalClue (Hugging Face gated dataset). You must request access from the dataset page and clone/download it manually.
 
-Original format:
+Expected YOLO-format structure (after download):
 
-- Images and YOLO labels:  
-  - `images/{train,val,test}/*.jpg`  
-  - `labels/{train,val,test}/*.txt`
-- Each label file contains one or more bounding boxes:  
-  `class_id cx cy w h` (normalized coordinates).
+```text
+dataset/
+  footprint_yolo/
+    species/
+      train/
+        images/
+        labels/
+      valid/
+        images/
+        labels/
+      test/
+        images/
+        labels/
+```
+
+- Images are in `images/*.jpg`
+- YOLO label files are in `labels/*.txt` with contents:
+
+  ```text
+  class_id cx cy w h
+  ```
+
+  (normalized coordinates, possibly multiple lines per file).
 
 ### YOLO → Patch Dataset
 
-Because the original dataset is built for **detection**, the first step is to convert it into a **patch-level classification dataset**:
+We convert the detection dataset into a **patch-level classification dataset**:
 
-- For each footprint bounding box:
-  - Convert YOLO box `(cx, cy, w, h)` to pixel coordinates.
-  - Optionally expand the box by a small margin (context).
-  - Crop the patch and save it under a class-specific folder.
+For each labeled bounding box:
 
-Final structure:
+1. Convert YOLO box `(cx, cy, w, h)` to pixel coordinates.
+2. Optionally expand the box by a small margin for context.
+3. Crop the footprint patch from the image.
+4. Save it into a species-specific subdirectory.
+
+Resulting structure:
 
 ```text
-footprint_patches/
-  train/
-    species_A/
-      *.jpg
-    species_B/
-      *.jpg
-    ...
-  val/
-    ...
-  test/
-    ...
+dataset/
+  footprint_patches/
+    train/
+      species_000/
+        *.jpg
+      species_001/
+        *.jpg
+      ...
+    valid/
+      species_000/
+      ...
+    test/
+      species_000/
+      ...
+    class_names.txt
 ```
 
-This patch dataset is then used both for **contrastive pretraining** and **classification**.
+We infer **117 species classes** directly from the label files (there is no `data.yaml` with class names in the dataset). `class_names.txt` stores a reproducible mapping from numeric class IDs to generic labels like `species_000`, `species_001`, etc.
 
 ---
 
-## 3. Environment & Dependencies
+## 3. Repository Structure
 
-Recommended:
+Core project files:
 
-- **Python** ≥ 3.9  
-- **PyTorch** ≥ 2.0  
-- **CUDA** GPU (optional but strongly recommended)
+- `prep_footprint_patches.ipynb`  
+  Build the patch-level classification dataset from YOLO annotations.
 
-Key packages:
+- `contrastive_main.ipynb`  
+  Train a **contrastive CNN encoder** (SimCLR-style) on footprint patches and save `footprint_encoder_contrastive.pth`.
 
-- `torch`, `torchvision`
-- `Pillow`
-- `pyyaml`
-- `tqdm`
-- `matplotlib` (for plotting in `linear_probe.ipynb`)
+- `linear_probe.ipynb`  
+  - Load the frozen contrastive encoder.  
+  - Precompute embeddings for train/valid splits.  
+  - Train a **linear classifier** on top of the embeddings.  
+  - Report classification performance.
+
+- `supervised_baseline.ipynb` (in progress)  
+  Train the same CNN architecture **end-to-end** in a fully supervised way and compare its accuracy to the contrastive + linear probe setup.
+
+- `README.md` (this file)  
+  Project description and run instructions.
+
 ---
 
-## 4. Workflow
+## 4. Environment & Dependencies
 
-### Step 1 – Preprocess YOLO → Patches
+The project was developed on **Windows** with **Python 3.14** and **CPU-only PyTorch** (no GPU). A more typical setup (Python 3.10–3.12 + CUDA) should also work.
+
+### Required packages
+
+Install at least:
+
+```bash
+pip install torch torchvision pillow pyyaml tqdm matplotlib
+```
+
+---
+
+## 5. How to Run
+
+### 5.1 Step 1 – Preprocess YOLO → Patches
 
 Notebook: **`prep_footprint_patches.ipynb`**
 
-1. Set these paths near the top of the notebook:
-   - `YOLO_ROOT = Path("path/to/footprint_yolo")`
-   - `PATCH_ROOT = Path("path/to/footprint_patches")`
-2. Run all cells to:
-   - Load class names from `data.yaml`.
-   - Convert YOLO bounding boxes into cropped patches.
-   - Save patches in `PATCH_ROOT/{train,val,test}/<class_name>/*.jpg`.
+1. Open the notebook.
+2. At the top, set the paths to match your local setup, for example:
 
-At the end, `footprint_patches/` should contain image patches grouped by species.
+   ```python
+   from pathlib import Path
+
+   YOLO_ROOT = Path(
+       r"C:\path\to\dataset\footprint_yolo\species"
+   )
+   PATCH_ROOT = Path(
+       r"C:\path\to\dataset\footprint_patches"
+   )
+   ```
+
+3. Run the notebook top to bottom. It will:
+   - Scan label files to infer the set of species class IDs.
+   - Create a `class_names.txt` mapping (e.g., `species_000` → class 0).
+   - Crop footprint patches and save them in:
+
+     ```text
+     footprint_patches/{train,valid,test}/species_XXX/*.jpg
+     ```
+
+After this step, you should have a **patch-level classification dataset** ready for both contrastive and supervised experiments.
 
 ---
 
-### Step 2 – Contrastive Pretraining (SimCLR-style)
+### 5.2 Step 2 – Contrastive Pretraining (SimCLR-style)
 
 Notebook: **`contrastive_main.ipynb`**
 
-CNN architecture (high level):
+1. Set `PATCH_ROOT` at the top:
 
-- 4 convolutional blocks with BatchNorm, ReLU, and MaxPool / AdaptiveAvgPool.
-- Final fully connected layer → 256-dim embedding.
+   ```python
+   from pathlib import Path
 
-Contrastive loss:
+   PATCH_ROOT = Path(
+       r"C:\path\to\dataset\footprint_patches"
+   )
+   image_size = 128
+   batch_size = 64
+   ```
 
-- SimCLR-style NT-Xent with temperature (e.g., τ = 0.5).
-- For a batch of N images, each with 2 views → 2N embeddings.
-- Each view’s positive is its paired view; all others are negatives.
+2. Make sure `FootprintPatchDataset` uses the `train` split under `PATCH_ROOT` and that `num_workers=0` in your `DataLoader`.
+
+3. Run cells that:
+   - Define `FootprintEncoder` (CNN encoder → 256-dim embedding).
+   - Define the projection head (256 → 128).
+   - Set up strong augmentations and `ContrastiveTransform`.
+   - Implement the NT-Xent loss (`nt_xent_loss`).
+   - Implement `train_contrastive`.
+
+4. Call `main()` (or the training function) to run contrastive training.  
+   - Training runs on CPU by default.  
+   - After training, the encoder weights are saved as:
+
+     ```text
+     footprint_encoder_contrastive.pth
+     ```
 
 ---
 
-### Step 3 – Linear Probe
+### 5.3 Step 3 – Linear Probe
 
 Notebook: **`linear_probe.ipynb`**
 
-Goal: **evaluate the quality of the learned embeddings** for species classification.
+This notebook evaluates how good the learned embeddings are for species classification.
 
-This gives a **linear probe performance number** to compare against a fully supervised CNN.
+1. Set `PATCH_ROOT` and `ENCODER_CKPT` near the top:
+
+   ```python
+   from pathlib import Path
+
+   PATCH_ROOT = Path(
+       r"C:\path\to\dataset\footprint_patches"
+   )
+   ENCODER_CKPT = "footprint_encoder_contrastive.pth"
+   image_size = 128
+   batch_size = 64
+   ```
+
+2. Load the patch datasets (train/valid) with simple transforms (e.g., `Resize` + `ToTensor`).
+
+3. Load the frozen encoder:
+
+4. **Precompute embeddings**:
+
+   ```python
+   train_feats, train_labels = compute_features(encoder, train_loader, device)
+   val_feats, val_labels = compute_features(encoder, val_loader, device)
+   ```
+
+   This runs the encoder once over all patches and stores 256-dim features in memory.
+
+5. Create feature datasets and loaders, then train the linear classifier:
+
+   ```python
+   model = LinearClassifier(feature_dim=256, num_classes=num_classes).to(device)
+   train_linear_probe(...)
+   ```
+
+6. The notebook will print training and validation accuracy per epoch.  
 
 ---
 
-### Step 4 – Supervised Baseline (Planned)
+### 5.4 Step 4 – Supervised Baseline (in progress)
 
-Notebook: **`supervised_baseline.ipynb`** (to be implemented)
+Notebook: **`supervised_baseline.ipynb`**
 
-Planned steps:
+Planned workflow:
 
-1. Use the same `FootprintEncoder` architecture but **train end-to-end** on the patch dataset with cross-entropy.
-2. Evaluate on the validation set.
-3. Compare:
+1. Use the same `FootprintPatchDataset` as above (`PATCH_ROOT/{train,valid,test}`).
+2. Define `SupervisedCNN`:
 
-- **Supervised-from-scratch accuracy** vs  
-- **Linear probe accuracy on contrastive encoder**
+   ```python
+   class SupervisedCNN(nn.Module):
+       def __init__(self, feature_dim=256, num_classes=117):
+           super().__init__()
+           self.encoder = FootprintEncoder(feature_dim=feature_dim)
+           self.fc = nn.Linear(feature_dim, num_classes)
 
-This comparison will answer:
+       def forward(self, x):
+           feats = self.encoder(x)
+           logits = self.fc(feats)
+           return logits
+   ```
 
+3. Train end-to-end with cross-entropy on the train split, validate on the valid split, and finally evaluate on the test split.
+4. Compare **supervised accuracy** with the **contrastive + linear probe** accuracy reported from `linear_probe.ipynb`.
+
+This will answer the main question:  
 > Does contrastive pretraining help learn better footprint representations than training a supervised classifier directly?
 
 ---
 
-## 5. Limitations 
+## 6. Notes & Limitations
+
+- Training is currently configured for **CPU-only** due to environment constraints; GPU training is recommended if available.
+- Class names are generic (`species_000`, `species_001`, …) because the dataset does not expose human-readable species labels.
+- Some notebook code includes minor compatibility workarounds for **Python 3.14 + CPU PyTorch**; in a more standard Python/PyTorch setup, these may not be necessary.
 
 ---
